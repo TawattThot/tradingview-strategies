@@ -1,0 +1,75 @@
+//@version=5
+// VWAP + RSI Pullback — built for the 1-hour chart
+// VWAP = session fair value | RSI = momentum complement
+// © TawattThot / Family — free / MIT-minded (paste into TradingView)
+
+strategy(
+     title             = "VWAP + RSI Pullback (1H)",
+     shorttitle        = "VWAP RSI 1H",
+     overlay           = true,
+     initial_capital   = 10000,
+     default_qty_type  = strategy.percent_of_equity,
+     default_qty_value = 10,
+     commission_type   = strategy.commission.percent,
+     commission_value  = 0.04,
+     pyramiding        = 0,
+     process_orders_on_close = true
+ )
+
+// Warn if not on 1H
+if barstate.islast and timeframe.period != "60"
+    label.new(bar_index, high, "Made for 1H — switch chart to 60", style=label.style_label_down, color=color.new(color.orange, 20), textcolor=color.white, size=size.small)
+
+// Inputs
+rsiLen      = input.int(14, "RSI Length", minval=2)
+rsiLongMin  = input.int(52, "Long: RSI ≥", minval=1, maxval=99)
+rsiShortMax = input.int(48, "Short: RSI ≤", minval=1, maxval=99)
+bandMult    = input.float(1.0, "Pullback band (SD)", minval=0.2, step=0.1)
+slMult      = input.float(1.5, "Stop = ATR ×", minval=0.5, step=0.1)
+tpMult      = input.float(2.5, "Target = ATR ×", minval=0.5, step=0.1)
+atrLen      = input.int(14, "ATR Length")
+allowShort  = input.bool(true, "Allow shorts")
+stdevLen    = input.int(40, "Band lookback", minval=10)
+
+// VWAP (session) + SD pullback bands
+vwapVal   = ta.vwap(hlc3)
+dev       = ta.stdev(hlc3 - vwapVal, stdevLen)
+upperBand = vwapVal + bandMult * dev
+lowerBand = vwapVal - bandMult * dev
+
+plot(vwapVal,   "VWAP",     color=color.blue, linewidth=2)
+u = plot(upperBand, "VWAP+SD", color=color.new(color.teal, 30))
+l = plot(lowerBand, "VWAP-SD", color=color.new(color.teal, 30))
+fill(u, l, color=color.new(color.blue, 92), title="Band zone")
+
+// RSI complement
+rsi        = ta.rsi(close, rsiLen)
+rsiRising  = rsi > rsi[1]
+rsiFalling = rsi < rsi[1]
+
+// 1H logic: pullback into band / under VWAP, then reclaim with RSI on your side
+longSetup  = low <= lowerBand or close < vwapVal
+shortSetup = high >= upperBand or close > vwapVal
+
+longEntry  = longSetup and ta.crossover(close, vwapVal) and rsi >= rsiLongMin and rsiRising and rsi < 78
+shortEntry = allowShort and shortSetup and ta.crossunder(close, vwapVal) and rsi <= rsiShortMax and rsiFalling and rsi > 22
+
+atr = ta.atr(atrLen)
+
+if longEntry
+    strategy.entry("Long", strategy.long)
+if shortEntry
+    strategy.entry("Short", strategy.short)
+
+if strategy.position_size > 0
+    strategy.exit("LX", "Long", stop=strategy.position_avg_price - slMult * atr, limit=strategy.position_avg_price + tpMult * atr)
+    if close < vwapVal and rsi < 42
+        strategy.close("Long", comment="bias lost")
+
+if strategy.position_size < 0
+    strategy.exit("SX", "Short", stop=strategy.position_avg_price + slMult * atr, limit=strategy.position_avg_price - tpMult * atr)
+    if close > vwapVal and rsi > 58
+        strategy.close("Short", comment="bias lost")
+
+bgcolor(longEntry ? color.new(color.green, 85) : shortEntry ? color.new(color.red, 85) : na)
+plotchar(rsi, title="RSI", char="", display=display.data_window)
