@@ -1,0 +1,89 @@
+//@version=5
+// Anchored VWAP + RSI Pullback — 1H (crypto / 24-7 friendly)
+// Anchor resets on a chosen period (default: weekly) instead of exchange session.
+// VWAP = fair value | RSI = momentum complement
+// © TawattThot / Family
+
+strategy(
+     title             = "Anchored VWAP + RSI (1H Crypto)",
+     shorttitle        = "AVWAP RSI 1H",
+     overlay           = true,
+     initial_capital   = 10000,
+     default_qty_type  = strategy.percent_of_equity,
+     default_qty_value = 10,
+     commission_type   = strategy.commission.percent,
+     commission_value  = 0.04,
+     pyramiding        = 0,
+     process_orders_on_close = true
+ )
+
+if barstate.islast and timeframe.period != "60"
+    label.new(bar_index, high, "Made for 1H — switch to 60", style=label.style_label_down, color=color.new(color.orange, 20), textcolor=color.white, size=size.small)
+
+// Inputs
+anchorTf    = input.timeframe("W", "VWAP anchor reset", options=["D", "W", "M"])
+rsiLen      = input.int(14, "RSI Length", minval=2)
+rsiLongMin  = input.int(52, "Long: RSI ≥", minval=1, maxval=99)
+rsiShortMax = input.int(48, "Short: RSI ≤", minval=1, maxval=99)
+bandMult    = input.float(1.0, "Pullback band (SD)", minval=0.2, step=0.1)
+stdevLen    = input.int(40, "Band lookback", minval=10)
+slMult      = input.float(1.5, "Stop = ATR ×", minval=0.5, step=0.1)
+tpMult      = input.float(2.5, "Target = ATR ×", minval=0.5, step=0.1)
+atrLen      = input.int(14, "ATR Length")
+allowShort  = input.bool(true, "Allow shorts")
+
+// New anchor when higher-TF bar changes
+newAnchor = ta.change(time(anchorTf)) != 0
+
+var float sumPV = 0.0
+var float sumV  = 0.0
+vol = nz(volume, 1.0)
+price = hlc3
+
+if newAnchor
+    sumPV := price * vol
+    sumV  := vol
+else
+    sumPV += price * vol
+    sumV  += vol
+
+avwap = sumV != 0 ? sumPV / sumV : price
+
+dev       = ta.stdev(hlc3 - avwap, stdevLen)
+upperBand = avwap + bandMult * dev
+lowerBand = avwap - bandMult * dev
+
+plot(avwap, "Anchored VWAP", color=color.blue, linewidth=2)
+u = plot(upperBand, "AVWAP+SD", color=color.new(color.teal, 30))
+l = plot(lowerBand, "AVWAP-SD", color=color.new(color.teal, 30))
+fill(u, l, color=color.new(color.blue, 92))
+
+rsi        = ta.rsi(close, rsiLen)
+rsiRising  = rsi > rsi[1]
+rsiFalling = rsi < rsi[1]
+
+longSetup  = low <= lowerBand or close < avwap
+shortSetup = high >= upperBand or close > avwap
+
+longEntry  = longSetup and ta.crossover(close, avwap) and rsi >= rsiLongMin and rsiRising and rsi < 78
+shortEntry = allowShort and shortSetup and ta.crossunder(close, avwap) and rsi <= rsiShortMax and rsiFalling and rsi > 22
+
+atr = ta.atr(atrLen)
+
+if longEntry
+    strategy.entry("Long", strategy.long)
+if shortEntry
+    strategy.entry("Short", strategy.short)
+
+if strategy.position_size > 0
+    strategy.exit("LX", "Long", stop=strategy.position_avg_price - slMult * atr, limit=strategy.position_avg_price + tpMult * atr)
+    if close < avwap and rsi < 42
+        strategy.close("Long", comment="bias lost")
+
+if strategy.position_size < 0
+    strategy.exit("SX", "Short", stop=strategy.position_avg_price + slMult * atr, limit=strategy.position_avg_price - tpMult * atr)
+    if close > avwap and rsi > 58
+        strategy.close("Short", comment="bias lost")
+
+bgcolor(longEntry ? color.new(color.green, 85) : shortEntry ? color.new(color.red, 85) : na)
+plotchar(rsi, title="RSI", char="", display=display.data_window)
